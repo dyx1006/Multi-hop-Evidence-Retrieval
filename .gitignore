@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Generated retrieval artifacts
+outputs/
+data/raw/
+data/*.jsonl
+data/*.npy
+data/*.faiss
+data/*.parts/
+FNLP_2026_Assignment3.pdf
+
+# Local environments and logs
+.venv/
+venv/
+*.log

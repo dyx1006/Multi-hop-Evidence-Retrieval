@@ -1,0 +1,7 @@
+huggingface_hub
+rank_bm25
+numpy
+torch
+sentence-transformers
+tqdm
+faiss-cpu

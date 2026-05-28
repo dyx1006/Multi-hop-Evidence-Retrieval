@@ -16,15 +16,8 @@ import shutil
 import time
 from pathlib import Path
 
-import numpy as np
-
-#import os
-#os.environ["TRANSFORMERS_NO_TF"] = "1"
-
-from sentence_transformers import SentenceTransformer
-
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 
 
 def load_jsonl(path):
@@ -40,13 +33,15 @@ def split_evenly(items, num_chunks):
     ]
 
 
-def encode_chunk(worker_id, device, texts, batch_size, output_path):
+def encode_chunk(worker_id, model_name, device, texts, batch_size, output_path):
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
 
     print(
-        f"[worker {worker_id}] Loading model: {MODEL_NAME} "
+        f"[worker {worker_id}] Loading model: {model_name} "
         f"(device={device}, n={len(texts)})"
     )
-    model = SentenceTransformer(MODEL_NAME, device=device)
+    model = SentenceTransformer(model_name, device=device)
 
     t0 = time.time()
     embeddings = model.encode(
@@ -65,12 +60,19 @@ def encode_chunk(worker_id, device, texts, batch_size, output_path):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
         "--devices",
         type=str,
-        default="cuda:0,cuda:1,cuda:2,cuda:3",
+        default=None,
         help="Comma-separated devices used to encode corpus shards.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Alias for --devices when using one device.",
     )
     args = parser.parse_args()
 
@@ -78,6 +80,8 @@ def main():
     emb_path = DATA_DIR / "corpus_embeddings.npy"
     if emb_path.exists():
         print(f"[skip] Embeddings already exist: {emb_path}")
+        import numpy as np
+
         embeddings = np.load(emb_path)
     else:
         print("Loading corpus...")
@@ -85,7 +89,13 @@ def main():
         corpus_texts = [f"{c['title']}: {c['text']}" for c in corpus]
         print(f"Corpus size: {len(corpus)} paragraphs")
 
-        devices = [device.strip() for device in args.devices.split(",") if device.strip()]
+        devices_arg = args.devices or args.device
+        if devices_arg:
+            devices = [device.strip() for device in devices_arg.split(",") if device.strip()]
+        else:
+            import torch
+
+            devices = ["cuda:0"] if torch.cuda.is_available() else ["cpu"]
         if not devices:
             raise ValueError("--devices must contain at least one device")
 
@@ -98,6 +108,7 @@ def main():
         tasks = [
             (
                 worker_id,
+                args.model,
                 device,
                 chunk,
                 args.batch_size,
@@ -109,7 +120,7 @@ def main():
 
         print(
             f"Encoding corpus on {len(tasks)} workers "
-            f"(devices={','.join(device for _, device, _, _, _ in tasks)}, "
+            f"(devices={','.join(device for _, _, device, _, _, _ in tasks)}, "
             f"batch_size={args.batch_size})..."
         )
         t0 = time.time()
@@ -119,6 +130,8 @@ def main():
                 print(f"[worker {worker_id}] Finished shape={shape}")
 
         print("Merging embedding shards...")
+        import numpy as np
+
         embeddings = np.concatenate(
             [np.load(part_dir / f"part_{worker_id:02d}.npy") for worker_id in range(len(tasks))],
             axis=0,
@@ -135,7 +148,12 @@ def main():
         print(f"[skip] FAISS index already exists: {index_path}")
         return
 
-    import faiss
+    try:
+        import faiss
+    except ImportError:
+        print("[warn] faiss is not installed; embeddings were saved but FAISS index was not built.")
+        print("Install faiss-cpu or faiss-gpu, then rerun this script to create data/corpus.faiss.")
+        return
 
     dim = embeddings.shape[1]
     print(f"Building FAISS IndexFlatIP (dim={dim}, n={embeddings.shape[0]})...")

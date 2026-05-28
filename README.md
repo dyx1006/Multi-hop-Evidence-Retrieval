@@ -1,6 +1,6 @@
 # FNLP Lab 3: Multi-hop Evidence Retrieval
 
-This repository contains baseline retrieval code for FNLP Lab 3 on the MuSiQue multi-hop evidence retrieval task.
+This repository contains retrieval code for FNLP Lab 3 on the MuSiQue multi-hop evidence retrieval task.
 
 The task is to retrieve the top-5 supporting paragraphs for each question and evaluate with Recall@5.
 
@@ -9,7 +9,7 @@ The task is to retrieve the top-5 supporting paragraphs for each question and ev
 Use Python 3.10+ if possible. Install the required packages:
 
 ```bash
-pip install huggingface_hub rank_bm25 numpy torch sentence-transformers tqdm
+pip install -r requirements.txt
 ```
 
 Install FAISS according to your machine:
@@ -22,7 +22,7 @@ pip install faiss-cpu
 conda install -c pytorch -c nvidia faiss-gpu
 ```
 
-The dense baseline uses `Qwen/Qwen3-Embedding-0.6B`, so the first run will download the model from HuggingFace.
+The dense retriever uses `Qwen/Qwen3-Embedding-0.6B` by default, so the first run will download the model from HuggingFace.
 
 ## 1. Prepare Data
 
@@ -42,12 +42,28 @@ data/test_4hop.jsonl
 ```
 We have already completed the data preparation, so you can skip this section.
 
-## 2. Build Dense Retrieval Index
+## 2. Run BM25 Sparse Retrieval
+
+```bash
+python scripts/run_bm25.py
+```
+
+This writes:
+
+```text
+outputs/bm25/predictions_2hop.jsonl
+outputs/bm25/predictions_3hop.jsonl
+outputs/bm25/predictions_4hop.jsonl
+```
+
+The script prints Recall@5 for each test split and the average score.
+
+## 3. Build Dense Retrieval Index
 
 Before running dense retrieval, encode the full corpus and build the FAISS index:
 
 ```bash
-python scripts/build_index.py --batch-size 32 --devices cuda:0
+python scripts/build_index.py --batch-size 32 --device cuda:0
 ```
 
 For multiple GPUs, pass a comma-separated device list:
@@ -65,9 +81,37 @@ data/corpus.faiss
 
 If these files already exist, the script reuses them.
 
-## 3. Evaluate Prediction Files
+If you do not pass `--device` or `--devices`, the script uses `cuda:0` when CUDA is available and otherwise falls back to CPU.
 
-The baseline scripts evaluate automatically, but any prediction file can also be evaluated manually:
+## 4. Run Dense Retrieval
+
+```bash
+python scripts/run_dense.py --device cuda:0 --batch-size 32
+```
+
+For CPU-only machines:
+
+```bash
+python scripts/run_dense.py --device cpu --batch-size 8
+```
+
+This writes:
+
+```text
+outputs/dense/predictions_2hop.jsonl
+outputs/dense/predictions_3hop.jsonl
+outputs/dense/predictions_4hop.jsonl
+```
+
+The query encoder prepends an instruction prompt by default. To disable it:
+
+```bash
+python scripts/run_dense.py --query-prefix ""
+```
+
+## 5. Evaluate Prediction Files
+
+The retrieval scripts evaluate automatically, but any prediction file can also be evaluated manually:
 
 ```bash
 python scripts/evaluate.py \
@@ -80,6 +124,18 @@ Prediction files must be JSONL, one object per line:
 
 ```json
 {"id": "question_id", "retrieved_corpus_ids": [1, 2, 3, 4, 5]}
+```
+
+## 6. Case Study Helper
+
+After generating BM25 and dense predictions, print examples where one method outperforms the other:
+
+```bash
+python scripts/analyze_cases.py \
+  --gold data/test_2hop.jsonl \
+  --bm25 outputs/bm25/predictions_2hop.jsonl \
+  --dense outputs/dense/predictions_2hop.jsonl \
+  --limit 3
 ```
 
 ## Notes
