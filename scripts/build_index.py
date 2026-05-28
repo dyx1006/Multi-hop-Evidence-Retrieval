@@ -58,6 +58,42 @@ def encode_chunk(worker_id, model_name, device, texts, batch_size, output_path):
     return worker_id, embeddings.shape
 
 
+def parse_cuda_device_id(device):
+    if device == "cuda":
+        return 0
+    if device.startswith("cuda:"):
+        return int(device.split(":", 1)[1])
+    raise ValueError(f"FAISS GPU device must look like 'cuda' or 'cuda:N', got {device!r}")
+
+
+def build_faiss_index(faiss, embeddings, faiss_device):
+    dim = embeddings.shape[1]
+    print(
+        f"Building FAISS IndexFlatIP "
+        f"(dim={dim}, n={embeddings.shape[0]}, device={faiss_device})..."
+    )
+    t0 = time.time()
+
+    if faiss_device == "cpu":
+        index = faiss.IndexFlatIP(dim)
+        index.add(embeddings)
+    else:
+        if not hasattr(faiss, "StandardGpuResources"):
+            raise RuntimeError(
+                "This faiss installation does not include GPU support. "
+                "Install faiss-gpu in the target CUDA environment, or use --faiss-device cpu."
+            )
+        gpu_id = parse_cuda_device_id(faiss_device)
+        resources = faiss.StandardGpuResources()
+        cpu_index = faiss.IndexFlatIP(dim)
+        gpu_index = faiss.index_cpu_to_gpu(resources, gpu_id, cpu_index)
+        gpu_index.add(embeddings)
+        index = faiss.index_gpu_to_cpu(gpu_index)
+
+    print(f"Index built in {time.time() - t0:.2f}s, total={index.ntotal}")
+    return index
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
@@ -78,6 +114,12 @@ def main():
         type=str,
         default=None,
         help="Alias for --devices when using one device.",
+    )
+    parser.add_argument(
+        "--faiss-device",
+        type=str,
+        default="cpu",
+        help="Device used to build the FAISS index: cpu, cuda, or cuda:N.",
     )
     args = parser.parse_args()
 
@@ -181,12 +223,7 @@ def main():
         print("Install faiss-cpu or faiss-gpu, then rerun this script to create data/corpus.faiss.")
         return
 
-    dim = embeddings.shape[1]
-    print(f"Building FAISS IndexFlatIP (dim={dim}, n={embeddings.shape[0]})...")
-    t0 = time.time()
-    index = faiss.IndexFlatIP(dim)
-    index.add(embeddings)
-    print(f"Index built in {time.time() - t0:.2f}s, total={index.ntotal}")
+    index = build_faiss_index(faiss, embeddings, args.faiss_device)
 
     faiss.write_index(index, str(index_path))
     print(f"Saved FAISS index to {index_path}")

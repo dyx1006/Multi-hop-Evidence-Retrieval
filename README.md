@@ -78,6 +78,17 @@ When changing the embedding model, rebuild cached embeddings and the index:
 python scripts/build_index.py --model BAAI/bge-base-en-v1.5 --device cuda:0 --batch-size 64 --force
 ```
 
+If `faiss-gpu` is installed, the FAISS index can also be built on GPU:
+
+```bash
+python scripts/build_index.py \
+  --model BAAI/bge-base-en-v1.5 \
+  --device cuda:0 \
+  --faiss-device cuda:0 \
+  --batch-size 64 \
+  --force
+```
+
 This generates:
 
 ```text
