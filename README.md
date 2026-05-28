@@ -72,6 +72,12 @@ For multiple GPUs, pass a comma-separated device list:
 python scripts/build_index.py --batch-size 32 --devices cuda:0,cuda:1,cuda:2,cuda:3
 ```
 
+When changing the embedding model, rebuild cached embeddings and the index:
+
+```bash
+python scripts/build_index.py --model BAAI/bge-base-en-v1.5 --device cuda:0 --batch-size 64 --force
+```
+
 This generates:
 
 ```text

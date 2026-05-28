@@ -18,9 +18,26 @@ DEFAULT_QUERY_PREFIX = (
 )
 
 
-def load_or_build_index(index_path, embeddings_path):
+def check_embedding_metadata(embeddings_path, model_name):
+    meta_path = Path(embeddings_path).with_name("corpus_embeddings.meta.json")
+    if not meta_path.exists():
+        print("[warn] embedding metadata is missing; cannot verify model/index compatibility.")
+        return
+
+    import json
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("model") != model_name:
+        raise ValueError(
+            f"Cached embeddings were built with {meta.get('model')!r}, "
+            f"but --model is {model_name!r}. Rebuild with scripts/build_index.py --force."
+        )
+
+
+def load_or_build_index(index_path, embeddings_path, model_name):
     import numpy as np
 
+    check_embedding_metadata(embeddings_path, model_name)
     index_path = Path(index_path)
     try:
         import faiss
@@ -107,7 +124,7 @@ def main():
 
     corpus = load_jsonl(args.corpus)
     corpus_ids = [row["corpus_id"] for row in corpus]
-    index_kind, index = load_or_build_index(args.index, args.embeddings)
+    index_kind, index = load_or_build_index(args.index, args.embeddings, args.model)
     index_size = index.ntotal if index_kind == "faiss" else index.shape[0]
     if index_size != len(corpus_ids):
         raise ValueError(f"Index size ({index_size}) does not match corpus size ({len(corpus_ids)}).")

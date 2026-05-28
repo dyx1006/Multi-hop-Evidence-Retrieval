@@ -63,6 +63,11 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild embeddings and index even if cached files already exist.",
+    )
+    parser.add_argument(
         "--devices",
         type=str,
         default=None,
@@ -78,7 +83,16 @@ def main():
 
     # --- Step 1: Encode corpus ---
     emb_path = DATA_DIR / "corpus_embeddings.npy"
-    if emb_path.exists():
+    index_path = DATA_DIR / "corpus.faiss"
+    meta_path = DATA_DIR / "corpus_embeddings.meta.json"
+    if emb_path.exists() and not args.force:
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("model") != args.model:
+                raise ValueError(
+                    f"Cached embeddings were built with {meta.get('model')!r}, "
+                    f"but --model is {args.model!r}. Rerun with --force to rebuild."
+                )
         print(f"[skip] Embeddings already exist: {emb_path}")
         import numpy as np
 
@@ -140,11 +154,23 @@ def main():
 
         np.save(emb_path, embeddings)
         print(f"Saved embeddings to {emb_path}")
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "model": args.model,
+                    "num_embeddings": int(embeddings.shape[0]),
+                    "embedding_dim": int(embeddings.shape[1]),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         shutil.rmtree(part_dir)
 
     # --- Step 2: Build FAISS index ---
-    index_path = DATA_DIR / "corpus.faiss"
-    if index_path.exists():
+    if index_path.exists() and not args.force:
         print(f"[skip] FAISS index already exists: {index_path}")
         return
 
