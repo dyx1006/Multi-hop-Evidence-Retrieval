@@ -9,6 +9,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
+DEFAULT_DENSE_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 
 DEFAULT_TEST_FILES = (
     DATA_DIR / "test_2hop.jsonl",

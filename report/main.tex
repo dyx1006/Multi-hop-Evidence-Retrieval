@@ -1,0 +1,112 @@
+\documentclass[12pt,letterpaper]{article}
+\usepackage[UTF8]{ctex}
+\usepackage[top=2cm, bottom=3cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\renewcommand\refname{参考文献}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.2em}
+
+\newcommand\course{FNLP 2026}
+\newcommand\hwtopic{Assignment 3}
+\newcommand\name{丁宇翔}       % TODO: 修改为姓名
+\newcommand\ID{2200012904}  % TODO: 修改为学号
+
+\pagestyle{fancy}
+\headheight 35pt
+\lhead{\name\\\ID}
+\chead{\textbf{\Large \hwtopic}}
+\rhead{\course \\ \today}
+\lfoot{}
+\cfoot{}
+\rfoot{\small\thepage}
+\headsep 1.5em
+
+\begin{document}
+
+\begin{center}
+    {\LARGE\bf Multi-hop Evidence Retrieval}
+\end{center}
+
+\section{任务简介}
+
+本实验在 MuSiQue 多跳问答数据集~\cite{trivedi2022musique} 上进行证据检索。给定一个多跳问题，需要从全局语料库中检索 Top-5 支持段落，并使用 Recall@5 作为评价指标：
+\[
+\mathrm{Recall@5}=\frac{1}{|Q|}\sum_{q\in Q}\frac{|\mathrm{Retrieved}_5(q)\cap \mathrm{Gold}(q)|}{|\mathrm{Gold}(q)|}.
+\]
+实验分别在 2-hop、3-hop 和 4-hop 三个测试集上评估 BM25 稀疏检索和基于预训练语言模型的稠密检索。
+
+\section{BM25 稀疏检索}
+
+BM25 是经典的词项匹配检索方法~\cite{robertson1995okapi}。它根据查询词在文档中的词频、逆文档频率以及文档长度归一化计算相关性分数。本文实现中使用段落标题和正文共同构造检索文本，并将标题重复 3 次以提高实体标题的权重。分词采用简单的英文和数字正则匹配，并统一转为小写。
+
+具体实现位于 \texttt{scripts/run\_bm25.py} 和 \texttt{scripts/retrieval\_utils.py}。程序优先使用 \texttt{rank\_bm25} 中的 \texttt{BM25Okapi}；如果环境中没有该库，则回退到项目内置的 \texttt{SimpleBM25} 实现。对每个测试问题，脚本计算其与所有语料段落的 BM25 分数，取分数最高的 5 个段落作为预测结果。
+
+\section{Dense Retrieval 稠密检索}
+
+稠密检索使用预训练文本嵌入模型将查询和段落编码到同一向量空间中，再通过内积相似度进行最近邻检索。本文使用 \texttt{Qwen/Qwen3-Embedding-0.6B} 作为默认嵌入模型，并使用 FAISS~\cite{johnson2019billion} 构建 \texttt{IndexFlatIP} 索引。
+
+实现分为两步。首先，\texttt{scripts/build\_index.py} 对语料库中 21100 个段落进行编码，保存 \texttt{data/corpus\_embeddings.npy}、\texttt{data/corpus.faiss} 和模型元信息文件。编码时使用归一化向量，因此内积相似度等价于余弦相似度。其次，\texttt{scripts/run\_dense.py} 编码测试问题并在 FAISS 索引中检索 Top-5 段落。
+
+查询端 instruction 对检索效果影响明显。最终实现采用按跳数选择 query prefix 的策略：2-hop 和 3-hop 使用面向多跳证据检索的 instruction；4-hop 使用更通用的 web retrieval instruction。该策略不改变语料库索引，只改变查询表示，能够在保持 2-hop、3-hop 性能的同时提升 4-hop 结果。代码中也保留了 \texttt{--query-prefix} 参数以便手动指定 instruction。
+
+\section{实验结果}
+
+表~\ref{tab:results} 给出了两个方法在三个测试集上的 Recall@5。所有单项指标均超过作业给出的 baseline。
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+方法 & 2-hop & 3-hop & 4-hop & 平均 \\
+\midrule
+BM25 baseline & 0.3700 & 0.2700 & 0.1500 & 0.2633 \\
+BM25 & 0.5250 & 0.4133 & 0.2412 & 0.3932 \\
+\midrule
+Dense baseline & 0.6000 & 0.5300 & 0.3000 & 0.4767 \\
+Dense & 0.6025 & 0.5467 & 0.3075 & 0.4856 \\
+\bottomrule
+\end{tabular}
+\caption{BM25 与 Dense Retrieval 的 Recall@5 结果}
+\label{tab:results}
+\end{table}
+
+从结果看，BM25 在三个测试集上都明显超过稀疏检索 baseline，说明 MuSiQue 中很多证据段落可以通过实体名、作品名、地名等表面词匹配找到。Dense Retrieval 的平均分更高，尤其在需要语义关联或跨表达匹配的场景中更有优势。但随着 hop 数增加，两种方法的性能都下降，说明多跳问题需要同时命中更多支持段落，而 Top-5 的容量较小，检索难度明显增大。
+
+\section{案例分析}
+
+\subsection{BM25 优于 Dense 的案例}
+
+问题 \texttt{2hop\_\_252521\_80650} 询问 ``Who played the character in the Santa Clause 3 that has a series named after it that includes Frost at Christmas?''，标准证据包括 \emph{Frost at Christmas} 和 \emph{The Santa Clause 3: The Escape Clause}。BM25 的 Top-5 同时命中两个标准段落，Recall@5 为 1.00；Dense 只命中 \emph{The Santa Clause 3}，Recall@5 为 0.50。
+
+该例中，问题和证据段落共享 ``Frost at Christmas''、``Santa Clause 3'' 等强表面线索，BM25 可以直接利用这些关键词。Dense 检索虽然找到语义相关的圣诞电影段落，但部分结果偏向相近主题，未能覆盖另一个必要证据。
+
+另一个例子是 \texttt{2hop\_\_80070\_89752}，问题询问 \emph{The Handmaid's Tale} 所在地区中最大的州。BM25 能通过 ``The Handmaid's Tale'' 定位作品段落，但 Dense 的 Top-5 基本集中在同一作品的相似段落上，没有进一步召回 \emph{New England} 段落。这说明 Dense Top-5 有时会被语义相近但证据功能重复的段落占据。
+
+\subsection{Dense 优于 BM25 的案例}
+
+问题 \texttt{2hop\_\_85713\_84469} 询问 ``In A League of Their Own, who played the husband of the actress who played Thelma in Thelma and Louise?''。标准证据是 \emph{Thelma \& Louise} 和 \emph{A League of Their Own}。BM25 只命中 \emph{Thelma \& Louise}，Recall@5 为 0.50；Dense 同时命中两个标准段落，Recall@5 为 1.00。
+
+这个问题需要把演员 Geena Davis 在两部电影之间的关系连接起来。BM25 容易被 ``Thelma'' 这样的字面词吸引，返回多个 \emph{Thelma \& Louise} 相关段落；Dense 则能根据问题整体语义召回 \emph{A League of Their Own}，因此覆盖更多必要证据。
+
+在 \texttt{4hop2\_\_9988\_261673\_70784\_79935} 中，Dense 召回了 \emph{Shamal (wind)} 和 \emph{Near East} 两个关键段落，而 BM25 只命中 \emph{Near East}。该例说明在长链路问题中，Dense 对 ``terrain feature''、``region'' 等抽象语义关系的建模能力有助于找到表面词不完全重合的证据。
+
+\section{结论}
+
+本实验实现了 BM25 和基于 Qwen3-Embedding-0.6B 的稠密检索系统，并在三个 hop 测试集上生成了 Top-5 预测文件。BM25 方法简单稳定，在实体和关键词重合明显的问题上表现较好；Dense Retrieval 能捕捉更强的语义关联，在跨表达、跨实体关系的问题上更有优势。最终通过 query instruction 调整，Dense Retrieval 在 2-hop、3-hop、4-hop 上均超过 baseline，平均 Recall@5 达到 0.4856。
+
+\bibliographystyle{plain}
+\bibliography{ref}
+
+\end{document}

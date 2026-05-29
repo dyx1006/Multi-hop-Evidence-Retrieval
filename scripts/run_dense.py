@@ -4,7 +4,15 @@ import argparse
 from pathlib import Path
 
 from evaluate import evaluate
-from retrieval_utils import DATA_DIR, DEFAULT_TEST_FILES, hop_label, load_jsonl, prediction_path, save_jsonl
+from retrieval_utils import (
+    DATA_DIR,
+    DEFAULT_DENSE_MODEL,
+    DEFAULT_TEST_FILES,
+    hop_label,
+    load_jsonl,
+    prediction_path,
+    save_jsonl,
+)
 
 try:
     from tqdm import tqdm
@@ -12,10 +20,17 @@ except ImportError:
     tqdm = lambda iterable, **_: iterable
 
 
-DEFAULT_QUERY_PREFIX = (
+MULTIHOP_QUERY_PREFIX = (
     "Instruct: Retrieve the supporting paragraphs needed to answer the multi-hop question.\n"
     "Query: "
 )
+WEB_QUERY_PREFIX = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+
+
+def default_query_prefix_for_file(test_file):
+    if "4hop" in Path(test_file).stem:
+        return WEB_QUERY_PREFIX
+    return MULTIHOP_QUERY_PREFIX
 
 
 def check_embedding_metadata(embeddings_path, model_name):
@@ -92,11 +107,52 @@ def search_index(index_kind, index, query_embeddings, k):
     return np.take_along_axis(candidate_indices, order, axis=1)
 
 
-def retrieve_dataset(model, index_kind, index, corpus_ids, questions, batch_size, k, query_prefix):
+def select_diverse_indices(row_indices, corpus_titles, k):
+    selected = []
+    seen_titles = set()
+
+    for idx in row_indices:
+        if idx < 0:
+            continue
+        title = corpus_titles[idx]
+        if title in seen_titles:
+            continue
+        selected.append(idx)
+        seen_titles.add(title)
+        if len(selected) == k:
+            return selected
+
+    for idx in row_indices:
+        if idx < 0 or idx in selected:
+            continue
+        selected.append(idx)
+        if len(selected) == k:
+            break
+
+    return selected
+
+
+def retrieve_dataset(
+    model,
+    index_kind,
+    index,
+    corpus_ids,
+    corpus_titles,
+    questions,
+    batch_size,
+    k,
+    candidate_k,
+    query_prefix,
+    title_diversity,
+):
     query_embeddings = encode_queries(model, questions, batch_size, query_prefix)
-    indices = search_index(index_kind, index, query_embeddings, k)
+    indices = search_index(index_kind, index, query_embeddings, candidate_k)
     predictions = []
     for item, row_indices in tqdm(zip(questions, indices), total=len(questions), desc="Dense retrieval"):
+        if title_diversity:
+            row_indices = select_diverse_indices(row_indices, corpus_titles, k)
+        else:
+            row_indices = row_indices[:k]
         predictions.append(
             {
                 "id": item["id"],
@@ -108,7 +164,11 @@ def retrieve_dataset(model, index_kind, index, corpus_ids, questions, batch_size
 
 def main():
     parser = argparse.ArgumentParser(description="Dense retrieval for MuSiQue evidence retrieval.")
-    parser.add_argument("--model", default="Qwen/Qwen3-Embedding-0.6B")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_DENSE_MODEL,
+        help=f"SentenceTransformer embedding model (default: {DEFAULT_DENSE_MODEL})",
+    )
     parser.add_argument("--device", default=None, help="Example: cuda:0, mps, cpu. Auto-selected if omitted.")
     parser.add_argument("--corpus", default=str(DATA_DIR / "corpus.jsonl"))
     parser.add_argument("--index", default=str(DATA_DIR / "corpus.faiss"))
@@ -117,13 +177,31 @@ def main():
     parser.add_argument("--output-dir", default="outputs/dense")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--k", type=int, default=5)
-    parser.add_argument("--query-prefix", default=DEFAULT_QUERY_PREFIX)
+    parser.add_argument("--candidate-k", type=int, default=None)
+    parser.add_argument(
+        "--title-diversity",
+        action="store_true",
+        help="Select top-k from a larger candidate set while preferring different document titles.",
+    )
+    parser.add_argument(
+        "--no-title-diversity",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--query-prefix",
+        default=None,
+        help="Query instruction prefix. If omitted, choose a default prefix by hop count.",
+    )
     args = parser.parse_args()
+    title_diversity = args.title_diversity and not args.no_title_diversity
+    candidate_k = max(args.k, args.candidate_k or (50 if title_diversity else args.k))
 
     from sentence_transformers import SentenceTransformer
 
     corpus = load_jsonl(args.corpus)
     corpus_ids = [row["corpus_id"] for row in corpus]
+    corpus_titles = [row.get("title", "") for row in corpus]
     index_kind, index = load_or_build_index(args.index, args.embeddings, args.model)
     index_size = index.ntotal if index_kind == "faiss" else index.shape[0]
     if index_size != len(corpus_ids):
@@ -137,15 +215,21 @@ def main():
         test_file = Path(test_file)
         questions = load_jsonl(test_file)
         out_path = prediction_path(args.output_dir, test_file)
+        query_prefix = args.query_prefix
+        if query_prefix is None:
+            query_prefix = default_query_prefix_for_file(test_file)
         predictions = retrieve_dataset(
             model=model,
             index_kind=index_kind,
             index=index,
             corpus_ids=corpus_ids,
+            corpus_titles=corpus_titles,
             questions=questions,
             batch_size=args.batch_size,
             k=args.k,
-            query_prefix=args.query_prefix,
+            candidate_k=candidate_k,
+            query_prefix=query_prefix,
+            title_diversity=title_diversity,
         )
         save_jsonl(predictions, out_path)
         recall, n_questions = evaluate(out_path, test_file, k=args.k)

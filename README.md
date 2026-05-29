@@ -1,38 +1,24 @@
-# FNLP Lab 3: Multi-hop Evidence Retrieval
+# FNLP Assignment 3: Multi-hop Evidence Retrieval
 
-This repository contains retrieval code for FNLP Lab 3 on the MuSiQue multi-hop evidence retrieval task.
+本项目实现 MuSiQue 多跳证据检索任务：对每个问题从全局段落语料库中检索 Top-5 支持段落，并用 Recall@5 评估。
 
-The task is to retrieve the top-5 supporting paragraphs for each question and evaluate with Recall@5.
+## 环境
 
-## Environment
-
-Use Python 3.10+ if possible. Install the required packages:
+建议使用 Python 3.10+。
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Install FAISS according to your machine:
+Dense Retrieval 默认使用 `Qwen/Qwen3-Embedding-0.6B`，可通过 `--model` 指定其他 SentenceTransformer 模型。
 
-```bash
-# CPU version
-pip install faiss-cpu
-
-# Or, if you use conda and need GPU support
-conda install -c pytorch -c nvidia faiss-gpu
-```
-
-The dense retriever uses `Qwen/Qwen3-Embedding-0.6B` by default, so the first run will download the model from HuggingFace.
-
-## 1. Prepare Data
-
-Download MuSiQue validation data from HuggingFace, build the global paragraph corpus, and sample 200 questions for each hop count:
+## 数据准备
 
 ```bash
 python scripts/prepare_data.py
 ```
 
-This generates:
+生成：
 
 ```text
 data/corpus.jsonl
@@ -40,15 +26,16 @@ data/test_2hop.jsonl
 data/test_3hop.jsonl
 data/test_4hop.jsonl
 ```
-We have already completed the data preparation, so you can skip this section.
 
-## 2. Run BM25 Sparse Retrieval
+如数据已存在，可跳过。
+
+## BM25 检索
 
 ```bash
 python scripts/run_bm25.py
 ```
 
-This writes:
+输出：
 
 ```text
 outputs/bm25/predictions_2hop.jsonl
@@ -56,63 +43,36 @@ outputs/bm25/predictions_3hop.jsonl
 outputs/bm25/predictions_4hop.jsonl
 ```
 
-The script prints Recall@5 for each test split and the average score.
+## Dense 检索
 
-## 3. Build Dense Retrieval Index
-
-Before running dense retrieval, encode the full corpus and build the FAISS index:
+先构建语料库向量和 FAISS 索引：
 
 ```bash
 python scripts/build_index.py --batch-size 32 --device cuda:0
 ```
 
-For multiple GPUs, pass a comma-separated device list:
+
+指定模型或更换模型时，需要在构建索引和检索时使用相同的 `--model`；如已有缓存，需加 `--force` 重建：
 
 ```bash
-python scripts/build_index.py --batch-size 32 --devices cuda:0,cuda:1,cuda:2,cuda:3
+python scripts/build_index.py --model Qwen/Qwen3-Embedding-0.6B --device cuda:0 --force
+python scripts/run_dense.py --model Qwen/Qwen3-Embedding-0.6B --device cuda:0 --batch-size 32
 ```
 
-When changing the embedding model, rebuild cached embeddings and the index:
-
-```bash
-python scripts/build_index.py --model BAAI/bge-base-en-v1.5 --device cuda:0 --batch-size 64 --force
-```
-
-If `faiss-gpu` is installed, the FAISS index can also be built on GPU:
+如安装了 `faiss-gpu`，也可以用 GPU 构建 FAISS 索引：
 
 ```bash
 python scripts/build_index.py \
-  --model BAAI/bge-base-en-v1.5 \
+  --model Qwen/Qwen3-Embedding-0.6B \
   --device cuda:0 \
   --faiss-device cuda:0 \
-  --batch-size 64 \
+  --batch-size 32 \
   --force
 ```
 
-This generates:
+`run_dense.py` 默认会按测试集跳数选择查询 instruction；如需手动指定，可使用 `--query-prefix`。
 
-```text
-data/corpus_embeddings.npy
-data/corpus.faiss
-```
-
-If these files already exist, the script reuses them.
-
-If you do not pass `--device` or `--devices`, the script uses `cuda:0` when CUDA is available and otherwise falls back to CPU.
-
-## 4. Run Dense Retrieval
-
-```bash
-python scripts/run_dense.py --device cuda:0 --batch-size 32
-```
-
-For CPU-only machines:
-
-```bash
-python scripts/run_dense.py --device cpu --batch-size 8
-```
-
-This writes:
+输出：
 
 ```text
 outputs/dense/predictions_2hop.jsonl
@@ -120,15 +80,9 @@ outputs/dense/predictions_3hop.jsonl
 outputs/dense/predictions_4hop.jsonl
 ```
 
-The query encoder prepends an instruction prompt by default. To disable it:
+## 评估
 
-```bash
-python scripts/run_dense.py --query-prefix ""
-```
-
-## 5. Evaluate Prediction Files
-
-The retrieval scripts evaluate automatically, but any prediction file can also be evaluated manually:
+检索脚本会自动打印各测试集 Recall@5，也可单独评估：
 
 ```bash
 python scripts/evaluate.py \
@@ -137,15 +91,13 @@ python scripts/evaluate.py \
   --k 5
 ```
 
-Prediction files must be JSONL, one object per line:
+预测文件格式：
 
 ```json
 {"id": "question_id", "retrieved_corpus_ids": [1, 2, 3, 4, 5]}
 ```
 
-## 6. Case Study Helper
-
-After generating BM25 and dense predictions, print examples where one method outperforms the other:
+## 案例分析
 
 ```bash
 python scripts/analyze_cases.py \
@@ -155,7 +107,12 @@ python scripts/analyze_cases.py \
   --limit 3
 ```
 
-## Notes
+## 提交
 
-- The assignment zip should include source code, the report PDF, and the final prediction JSONL files required by the course.
-- Dataset files and model weights do not need to be submitted.
+压缩包应包含：
+
+- 实验报告 PDF
+- Python 源代码和 README
+- `outputs/` 下的预测 JSONL 文件
+
+无需提交原始数据集和模型权重。

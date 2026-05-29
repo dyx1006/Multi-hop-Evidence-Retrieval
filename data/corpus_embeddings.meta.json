@@ -1,0 +1,5 @@
+{
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "num_embeddings": 21100,
+  "embedding_dim": 1024
+}

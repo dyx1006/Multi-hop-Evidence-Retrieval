@@ -14,10 +14,8 @@ import json
 import multiprocessing as mp
 import shutil
 import time
-from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DEFAULT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+from retrieval_utils import DATA_DIR, DEFAULT_DENSE_MODEL
 
 
 def load_jsonl(path):
@@ -96,7 +94,11 @@ def build_faiss_index(faiss, embeddings, faiss_device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=DEFAULT_MODEL_NAME)
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_DENSE_MODEL,
+        help=f"SentenceTransformer embedding model (default: {DEFAULT_DENSE_MODEL})",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument(
         "--force",
@@ -180,10 +182,14 @@ def main():
             f"batch_size={args.batch_size})..."
         )
         t0 = time.time()
-        ctx = mp.get_context("spawn")
-        with ctx.Pool(processes=len(tasks)) as pool:
-            for worker_id, shape in pool.starmap(encode_chunk, tasks):
-                print(f"[worker {worker_id}] Finished shape={shape}")
+        if len(tasks) == 1:
+            worker_id, shape = encode_chunk(*tasks[0])
+            print(f"[worker {worker_id}] Finished shape={shape}")
+        else:
+            ctx = mp.get_context("spawn")
+            with ctx.Pool(processes=len(tasks)) as pool:
+                for worker_id, shape in pool.starmap(encode_chunk, tasks):
+                    print(f"[worker {worker_id}] Finished shape={shape}")
 
         print("Merging embedding shards...")
         import numpy as np
