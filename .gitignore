@@ -3,13 +3,12 @@ __pycache__/
 *.py[cod]
 
 # Generated retrieval artifacts
-outputs/
 data/raw/
 data/*.jsonl
 data/*.npy
 data/*.faiss
+data/*.meta.json
 data/*.parts/
-FNLP_2026_Assignment3.pdf
 
 # Local environments and logs
 .venv/
